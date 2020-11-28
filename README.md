@@ -4,3 +4,5 @@ A qgis python script to take the cliff output files from Kartapullautin and veto
 
 In the repository I have stored both the python script and a model file that can be downloaded and stored in the model library
 
+The overview of the model from qgis describes the steps of the process
+<img src=model_overview.png>
