@@ -1,0 +1,159 @@
+"""
+Model exported as python.
+Name : Kinnebergsmetoden
+Group : laserdata
+With QGIS : 31600
+"""
+
+from qgis.core import QgsProcessing
+from qgis.core import QgsProcessingAlgorithm
+from qgis.core import QgsProcessingMultiStepFeedback
+from qgis.core import QgsProcessingParameterVectorLayer
+from qgis.core import QgsProcessingParameterBoolean
+from qgis.core import QgsProcessingParameterFeatureSink
+from qgis.core import QgsCoordinateReferenceSystem
+import processing
+
+
+class Kinnebergsmetoden(QgsProcessingAlgorithm):
+
+    def initAlgorithm(self, config=None):
+        self.addParameter(QgsProcessingParameterVectorLayer('Branter', 'Branter', types=[QgsProcessing.TypeVectorAnyGeometry], defaultValue=None))
+        self.addParameter(QgsProcessingParameterBoolean('VERBOSE_LOG', 'Verbose loggning', optional=True, defaultValue=False))
+        self.addParameter(QgsProcessingParameterFeatureSink('Rensade_branter', 'rensade_branter', type=QgsProcessing.TypeVectorAnyGeometry, createByDefault=True, defaultValue=None))
+        self.addParameter(QgsProcessingParameterFeatureSink('Buffert', 'Buffert', type=QgsProcessing.TypeVectorAnyGeometry, createByDefault=True, supportsAppend=True, defaultValue=None))
+
+    def processAlgorithm(self, parameters, context, model_feedback):
+        # Use a multi-step feedback, so that individual child algorithm progress reports are adjusted for the
+        # overall progress through the model
+        feedback = QgsProcessingMultiStepFeedback(8, model_feedback)
+        results = {}
+        outputs = {}
+
+        # Välj efter attribut
+        alg_params = {
+            'FIELD': 'Layer',
+            'INPUT': parameters['Branter'],
+            'METHOD': 0,
+            'OPERATOR': 0,
+            'VALUE': 'cliff3'
+        }
+        outputs['VljEfterAttribut'] = processing.run('qgis:selectbyattribute', alg_params, context=context, feedback=feedback, is_child_algorithm=True)
+
+        feedback.setCurrentStep(1)
+        if feedback.isCanceled():
+            return {}
+
+        # Buffert
+        alg_params = {
+            'DISSOLVE': True,
+            'DISTANCE': 1,
+            'END_CAP_STYLE': 0,
+            'INPUT': outputs['VljEfterAttribut']['OUTPUT'],
+            'JOIN_STYLE': 0,
+            'MITER_LIMIT': 2,
+            'SEGMENTS': 5,
+            'OUTPUT': QgsProcessing.TEMPORARY_OUTPUT
+        }
+        outputs['Buffert'] = processing.run('native:buffer', alg_params, context=context, feedback=feedback, is_child_algorithm=True)
+
+        feedback.setCurrentStep(2)
+        if feedback.isCanceled():
+            return {}
+
+        # Definiera shapefilens projektion
+        alg_params = {
+            'CRS': QgsCoordinateReferenceSystem('EPSG:3006'),
+            'INPUT': outputs['Buffert']['OUTPUT']
+        }
+        outputs['DefinieraShapefilensProjektion'] = processing.run('qgis:definecurrentprojection', alg_params, context=context, feedback=feedback, is_child_algorithm=True)
+
+        feedback.setCurrentStep(3)
+        if feedback.isCanceled():
+            return {}
+
+        # Multipart till singelpart
+        alg_params = {
+            'INPUT': outputs['DefinieraShapefilensProjektion']['INPUT'],
+            'OUTPUT': parameters['Buffert']
+        }
+        outputs['MultipartTillSingelpart'] = processing.run('native:multiparttosingleparts', alg_params, context=context, feedback=feedback, is_child_algorithm=True)
+        results['Buffert'] = outputs['MultipartTillSingelpart']['OUTPUT']
+
+        feedback.setCurrentStep(4)
+        if feedback.isCanceled():
+            return {}
+
+        # v.voronoi.skeleton
+        alg_params = {
+            '-a': False,
+            '-l': False,
+            '-s': True,
+            '-t': False,
+            'GRASS_MIN_AREA_PARAMETER': 0.0001,
+            'GRASS_OUTPUT_TYPE_PARAMETER': 0,
+            'GRASS_REGION_PARAMETER': None,
+            'GRASS_SNAP_TOLERANCE_PARAMETER': -1,
+            'GRASS_VECTOR_DSCO': '',
+            'GRASS_VECTOR_EXPORT_NOCAT': False,
+            'GRASS_VECTOR_LCO': '',
+            'input': outputs['MultipartTillSingelpart']['OUTPUT'],
+            'smoothness': 1.25,
+            'thin': -1,
+            'output': QgsProcessing.TEMPORARY_OUTPUT
+        }
+        outputs['Vvoronoiskeleton'] = processing.run('grass7:v.voronoi.skeleton', alg_params, context=context, feedback=feedback, is_child_algorithm=True)
+
+        feedback.setCurrentStep(5)
+        if feedback.isCanceled():
+            return {}
+
+        # voroni projektion
+        alg_params = {
+            'CRS': QgsCoordinateReferenceSystem('EPSG:3006'),
+            'INPUT': outputs['Vvoronoiskeleton']['output']
+        }
+        outputs['VoroniProjektion'] = processing.run('qgis:definecurrentprojection', alg_params, context=context, feedback=feedback, is_child_algorithm=True)
+
+        feedback.setCurrentStep(6)
+        if feedback.isCanceled():
+            return {}
+
+        # Lägg till geometriattribut
+        alg_params = {
+            'CALC_METHOD': 1,
+            'INPUT': outputs['VoroniProjektion']['INPUT'],
+            'OUTPUT': QgsProcessing.TEMPORARY_OUTPUT
+        }
+        outputs['LggTillGeometriattribut'] = processing.run('qgis:exportaddgeometrycolumns', alg_params, context=context, feedback=feedback, is_child_algorithm=True)
+
+        feedback.setCurrentStep(7)
+        if feedback.isCanceled():
+            return {}
+
+        # Extrahera efter attribut
+        alg_params = {
+            'FIELD': 'sinuosity',
+            'INPUT': outputs['LggTillGeometriattribut']['OUTPUT'],
+            'OPERATOR': 1,
+            'VALUE': '1',
+            'OUTPUT': parameters['Rensade_branter']
+        }
+        outputs['ExtraheraEfterAttribut'] = processing.run('native:extractbyattribute', alg_params, context=context, feedback=feedback, is_child_algorithm=True)
+        results['Rensade_branter'] = outputs['ExtraheraEfterAttribut']['OUTPUT']
+        return results
+
+    def name(self):
+        return 'Kinnebergsmetoden'
+
+    def displayName(self):
+        return 'Kinnebergsmetoden'
+
+    def group(self):
+        return 'laserdata'
+
+    def groupId(self):
+        return 'laserdata'
+
+    def createInstance(self):
+        return Kinnebergsmetoden()
